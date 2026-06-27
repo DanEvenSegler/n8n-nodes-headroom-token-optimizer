@@ -1,0 +1,53 @@
+{
+	"name": "n8n-nodes-headroom-token-optimizer",
+	"version": "1.0.0",
+	"description": "n8n community node plugin to optimize LLM token usage using Headroom context compression",
+	"license": "MIT",
+	"homepage": "",
+	"keywords": [
+		"n8n-community-node-package"
+	],
+	"author": {
+		"name": "Dan Even Segler",
+		"email": "danevensegler08@gmail.com"
+	},
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/DanEvenSegler/n8n-nodes-headroom-token-optimizer.git"
+	},
+	"main": "dist/nodes/HeadroomTokenOptimizer/HeadroomTokenOptimizer.node.js",
+	"scripts": {
+		"build": "n8n-node build && node -e \"const fs = require('fs'); fs.mkdirSync('dist/icons', { recursive: true }); fs.readdirSync('icons').forEach(f => fs.copyFileSync('icons/'+f, 'dist/icons/'+f))\"",
+		"build:watch": "tsc --watch",
+		"dev": "n8n-node dev",
+		"lint": "n8n-node lint",
+		"lint:fix": "n8n-node lint --fix",
+		"release": "n8n-node release",
+		"prepublishOnly": "n8n-node prerelease"
+	},
+	"files": [
+		"dist"
+	],
+	"n8n": {
+		"n8nNodesApiVersion": 1,
+		"strict": false,
+		"credentials": [],
+		"nodes": [
+			"dist/nodes/HeadroomTokenOptimizer/HeadroomTokenOptimizer.node.js",
+			"dist/nodes/HeadroomModelMiddleware/HeadroomModelMiddleware.node.js"
+		]
+	},
+	"devDependencies": {
+		"@langchain/core": "^0.2.0",
+		"@n8n/node-cli": "latest",
+		"eslint": "9.29.0",
+		"headroom-ai": "^0.22.4",
+		"prettier": "3.8.3",
+		"release-it": "20.2.0",
+		"typescript": "5.9.3"
+	},
+	"peerDependencies": {
+		"headroom-ai": "^0.22.4",
+		"n8n-workflow": "*"
+	}
+}
