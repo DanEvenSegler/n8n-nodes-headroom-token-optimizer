@@ -23,6 +23,10 @@ interface HeadroomOptions {
 	timeout: number;
 	retries: number;
 	tokenBudget?: number;
+	config?: {
+		compressUserMessages?: boolean;
+		compressSystemMessages?: boolean;
+	};
 }
 
 // Helper to determine message role
@@ -261,6 +265,20 @@ export class HeadroomModelMiddleware implements INodeType {
 				description: 'Whether to fall back to the uncompressed input if the Headroom proxy is unreachable or returns an error',
 			},
 			{
+				displayName: 'Compress User Messages',
+				name: 'compressUserMessages',
+				type: 'boolean',
+				default: true,
+				description: 'Whether to compress user messages (prompts, chat inputs). Headroom protects user messages by default.',
+			},
+			{
+				displayName: 'Compress System Messages',
+				name: 'compressSystemMessages',
+				type: 'boolean',
+				default: false,
+				description: 'Whether to compress system messages (system prompts). Headroom protects system messages by default.',
+			},
+			{
 				displayName: 'Timeout (Ms)',
 				name: 'timeout',
 				type: 'number',
@@ -292,6 +310,8 @@ export class HeadroomModelMiddleware implements INodeType {
 		const baseUrl = this.getNodeParameter('baseUrl', 0, 'http://localhost:8787') as string;
 		const apiKey = this.getNodeParameter('apiKey', 0, '') as string;
 		const fallback = this.getNodeParameter('fallback', 0, true) as boolean;
+		const compressUserMessages = this.getNodeParameter('compressUserMessages', 0, true) as boolean;
+		const compressSystemMessages = this.getNodeParameter('compressSystemMessages', 0, false) as boolean;
 		const timeout = this.getNodeParameter('timeout', 0, 30000) as number;
 		const retries = this.getNodeParameter('retries', 0, 1) as number;
 
@@ -301,6 +321,10 @@ export class HeadroomModelMiddleware implements INodeType {
 			fallback,
 			timeout,
 			retries,
+			config: {
+				compressUserMessages,
+				compressSystemMessages,
+			}
 		};
 
 		if (tokenBudget > 0) {

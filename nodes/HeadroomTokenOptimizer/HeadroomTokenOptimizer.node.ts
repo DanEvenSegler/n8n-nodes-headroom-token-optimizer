@@ -131,6 +131,20 @@ export class HeadroomTokenOptimizer implements INodeType {
 				description: 'Whether to fall back to the uncompressed input if the Headroom proxy is unreachable or returns an error',
 			},
 			{
+				displayName: 'Compress User Messages',
+				name: 'compressUserMessages',
+				type: 'boolean',
+				default: true,
+				description: 'Whether to compress user messages (prompts and inputs). Headroom protects user messages by default.',
+			},
+			{
+				displayName: 'Compress System Messages',
+				name: 'compressSystemMessages',
+				type: 'boolean',
+				default: false,
+				description: 'Whether to compress system messages (system prompts). Headroom protects system messages by default.',
+			},
+			{
 				displayName: 'Timeout (Ms)',
 				name: 'timeout',
 				type: 'number',
@@ -159,6 +173,8 @@ export class HeadroomTokenOptimizer implements INodeType {
 				const baseUrl = this.getNodeParameter('baseUrl', i, 'http://localhost:8787') as string;
 				const apiKey = this.getNodeParameter('apiKey', i, '') as string;
 				const fallback = this.getNodeParameter('fallback', i, true) as boolean;
+				const compressUserMessages = this.getNodeParameter('compressUserMessages', i, true) as boolean;
+				const compressSystemMessages = this.getNodeParameter('compressSystemMessages', i, false) as boolean;
 				const timeout = this.getNodeParameter('timeout', i, 30000) as number;
 				const retries = this.getNodeParameter('retries', i, 1) as number;
 
@@ -193,12 +209,20 @@ export class HeadroomTokenOptimizer implements INodeType {
 					retries: number;
 					apiKey?: string;
 					tokenBudget?: number;
+					config?: {
+						compressUserMessages?: boolean;
+						compressSystemMessages?: boolean;
+					};
 				} = {
 					model,
 					baseUrl,
 					timeout,
 					fallback,
 					retries,
+					config: {
+						compressUserMessages,
+						compressSystemMessages,
+					}
 				};
 
 				if (tokenBudget > 0) {
