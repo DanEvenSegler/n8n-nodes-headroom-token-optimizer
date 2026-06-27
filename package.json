@@ -1,6 +1,6 @@
 {
 	"name": "n8n-nodes-headroom-token-optimizer",
-	"version": "1.0.0",
+	"version": "1.0.1",
 	"description": "n8n community node plugin to optimize LLM token usage using Headroom context compression",
 	"license": "MIT",
 	"homepage": "",
@@ -37,17 +37,18 @@
 			"dist/nodes/HeadroomModelMiddleware/HeadroomModelMiddleware.node.js"
 		]
 	},
+	"dependencies": {
+		"headroom-ai": "^0.22.4"
+	},
 	"devDependencies": {
 		"@langchain/core": "^0.2.0",
 		"@n8n/node-cli": "latest",
 		"eslint": "9.29.0",
-		"headroom-ai": "^0.22.4",
 		"prettier": "3.8.3",
 		"release-it": "20.2.0",
 		"typescript": "5.9.3"
 	},
 	"peerDependencies": {
-		"headroom-ai": "^0.22.4",
 		"n8n-workflow": "*"
 	}
 }
