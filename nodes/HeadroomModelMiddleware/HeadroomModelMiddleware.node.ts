@@ -291,8 +291,11 @@ export class HeadroomModelMiddleware implements INodeType {
 					}
 				}
 
-				const value = Reflect.get(target, prop, receiver);
-				if (typeof value === 'function') {
+				const value = Reflect.get(target, prop, target);
+				if (typeof value === 'function' && prop !== 'constructor') {
+					if (prop === 'bind' || prop === 'bindTools') {
+						return (value as (...args: unknown[]) => unknown).bind(receiver);
+					}
 					return (value as (...args: unknown[]) => unknown).bind(target);
 				}
 				return value;

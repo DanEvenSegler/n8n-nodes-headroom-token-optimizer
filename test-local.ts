@@ -8,7 +8,6 @@ require.cache[headroomKey] = {
 		compress: async (messages: any[], options: any) => {
 			console.log('[Mock headroom-ai.compress] compressing:', JSON.stringify(messages));
 			console.log('[Mock headroom-ai.compress] options:', JSON.stringify(options));
-			// Simply shorten the message contents by removing vowels as a mock "compression"
 			const compressed = messages.map(m => ({
 				role: m.role,
 				content: m.content.replace(/[aeiouAEIOU]/g, '')
@@ -25,6 +24,7 @@ require.cache[headroomKey] = {
 
 import { HeadroomModelMiddleware } from './nodes/HeadroomModelMiddleware/HeadroomModelMiddleware.node';
 import { HeadroomTokenOptimizer } from './nodes/HeadroomTokenOptimizer/HeadroomTokenOptimizer.node';
+import { isChatInstance } from '@n8n/ai-utilities';
 
 // A mock message mimicking a LangChain HumanMessage
 class MockHumanMessage {
@@ -50,10 +50,18 @@ class MockAIMessage {
 
 // Mock of LangChain Chat Model
 class MockChatModel {
+	lc_namespace = ['langchain', 'chat_models', 'mock'];
+	
+	bindTools(tools: any) {
+		console.log('[MockChatModel.bindTools] called with tools:', JSON.stringify(tools));
+		return this;
+	}
+	
 	async invoke(input: any) {
 		console.log('[MockChatModel.invoke] received:', JSON.stringify(input));
 		return { content: 'Mocked output response' };
 	}
+	
 	async generate(messages: any[]) {
 		console.log('[MockChatModel.generate] received:', JSON.stringify(messages));
 		return {
@@ -85,7 +93,11 @@ async function runTests() {
 	const supplyResult = await middleware.supplyData.call(context);
 	const wrappedModel = supplyResult.response as any;
 	
-	console.log('1. Testing invoke() with string input:');
+	console.log('Validation checks:');
+	console.log('isChatInstance(wrappedModel) should be true:', isChatInstance(wrappedModel));
+	console.log('wrappedModel.bindTools should be defined:', typeof wrappedModel.bindTools);
+	
+	console.log('\n1. Testing invoke() with string input:');
 	const responseInvokeStr = await wrappedModel.invoke('Hello World');
 	console.log('Invoke String response:', responseInvokeStr);
 	
