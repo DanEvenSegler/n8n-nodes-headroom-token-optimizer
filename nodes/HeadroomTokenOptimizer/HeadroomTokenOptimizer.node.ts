@@ -13,9 +13,12 @@ import { compress } from 'headroom-ai';
 
 interface HeadroomCompressResult {
 	messages: Array<{ role: string; content: string }>;
+	tokensBefore?: number;
+	tokensAfter?: number;
 	tokensSaved?: number;
-	originalTokens?: number;
-	compressedTokens?: number;
+	compressionRatio?: number;
+	transformsApplied?: string[];
+	compressed?: boolean;
 }
 
 export class HeadroomTokenOptimizer implements INodeType {
@@ -91,19 +94,65 @@ export class HeadroomTokenOptimizer implements INodeType {
 				description: 'The JSON array of messages to compress, e.g. [{"role": "user", "content": "..."}]',
 			},
 			{
-				displayName: 'Model',
+				displayName: 'Tokenizer Model',
 				name: 'model',
-				type: 'string',
+				type: 'options',
+				options: [
+					{ name: 'GPT-4o (OpenAI)', value: 'gpt-4o' },
+					{ name: 'GPT-4o Mini (OpenAI)', value: 'gpt-4o-mini' },
+					{ name: 'GPT-4 Turbo (OpenAI)', value: 'gpt-4-turbo' },
+					{ name: 'GPT-4 (OpenAI)', value: 'gpt-4' },
+					{ name: 'GPT-3.5 Turbo (OpenAI)', value: 'gpt-3.5-turbo' },
+					{ name: 'o1 (OpenAI)', value: 'o1' },
+					{ name: 'o1-Mini (OpenAI)', value: 'o1-mini' },
+					{ name: 'o3 (OpenAI)', value: 'o3' },
+					{ name: 'o3-Mini (OpenAI)', value: 'o3-mini' },
+					{ name: 'Claude 3.5 Sonnet (Anthropic)', value: 'claude-3-5-sonnet-20241022' },
+					{ name: 'Claude 3.5 Haiku (Anthropic)', value: 'claude-3-5-haiku-20241022' },
+					{ name: 'Claude 3 Opus (Anthropic)', value: 'claude-3-opus-20240229' },
+					{ name: 'Claude 3 Sonnet (Anthropic)', value: 'claude-3-sonnet-20240229' },
+					{ name: 'Claude 3 Haiku (Anthropic)', value: 'claude-3-haiku-20240307' },
+					{ name: 'Claude 4 Opus (Anthropic)', value: 'claude-sonnet-4-20250514' },
+					{ name: 'Gemini 1.5 Pro (Google)', value: 'gemini/gemini-1.5-pro' },
+					{ name: 'Gemini 1.5 Flash (Google)', value: 'gemini/gemini-1.5-flash' },
+					{ name: 'Gemini 2.0 Flash (Google)', value: 'gemini/gemini-2.0-flash' },
+					{ name: 'Gemini 2.5 Pro (Google)', value: 'gemini/gemini-2.5-pro' },
+					{ name: 'Command R+ (Cohere)', value: 'command-r-plus' },
+					{ name: 'Command R (Cohere)', value: 'command-r' },
+					{ name: 'Mistral Large (Mistral)', value: 'mistral/mistral-large-latest' },
+					{ name: 'Mistral Medium (Mistral)', value: 'mistral/mistral-medium-latest' },
+					{ name: 'Mistral Small (Mistral)', value: 'mistral/mistral-small-latest' },
+					{ name: 'Codestral (Mistral)', value: 'mistral/codestral-latest' },
+					{ name: 'Llama 3.1 70B (Meta/Groq)', value: 'groq/llama-3.1-70b-versatile' },
+					{ name: 'Llama 3.1 8B (Meta/Groq)', value: 'groq/llama-3.1-8b-instant' },
+					{ name: 'DeepSeek Chat (DeepSeek)', value: 'deepseek/deepseek-chat' },
+					{ name: 'DeepSeek Coder (DeepSeek)', value: 'deepseek/deepseek-coder' },
+					{ name: 'Custom', value: 'custom' },
+				],
 				default: 'gpt-4o',
 				required: true,
-				description: 'The LLM model name (used to calculate accurate token counts for compression)',
+				description: 'Tokenizer schema used by Headroom to count tokens. Pick the closest model family — does NOT affect your actual LLM. For Ollama / local models, use GPT-4o.',
+			},
+			{
+				displayName: 'Custom Tokenizer Model',
+				name: 'customModel',
+				type: 'string',
+				displayOptions: {
+					show: {
+						model: ['custom'],
+					},
+				},
+				default: '',
+				required: true,
+				placeholder: 'e.g. together_ai/meta-llama/Llama-3-70b',
+				description: 'A litellm-compatible model identifier. See https://docs.litellm.ai/docs/providers for the full list.',
 			},
 			{
 				displayName: 'Token Budget',
 				name: 'tokenBudget',
 				type: 'number',
 				default: 0,
-				description: 'Enforce compression when prompt size exceeds this token count. Set to 0 to disable.',
+				description: 'Enforce compression when prompt size exceeds this token count. Set to 0 to always compress.',
 			},
 			{
 				displayName: 'Base URL',
@@ -168,7 +217,10 @@ export class HeadroomTokenOptimizer implements INodeType {
 		for (let i = 0; i < items.length; i++) {
 			try {
 				const mode = this.getNodeParameter('mode', i, 'text') as 'text' | 'messages' | 'chatInput';
-				const model = this.getNodeParameter('model', i, 'gpt-4o') as string;
+				const modelSelection = this.getNodeParameter('model', i, 'gpt-4o') as string;
+				const model = modelSelection === 'custom'
+					? (this.getNodeParameter('customModel', i, 'gpt-4o') as string)
+					: modelSelection;
 				const tokenBudget = this.getNodeParameter('tokenBudget', i, 0) as number;
 				const baseUrl = this.getNodeParameter('baseUrl', i, 'http://localhost:8787') as string;
 				const apiKey = this.getNodeParameter('apiKey', i, '') as string;
@@ -248,16 +300,18 @@ export class HeadroomTokenOptimizer implements INodeType {
 					responseJson = {
 						compressed: compressedOutput,
 						tokensSaved: result.tokensSaved ?? 0,
-						originalTokens: result.originalTokens,
-						compressedTokens: result.compressedTokens,
+						originalTokens: result.tokensBefore ?? 0,
+						compressedTokens: result.tokensAfter ?? 0,
+						compressionRatio: result.compressionRatio ?? 1,
 					};
 				} else if (mode === 'messages') {
 					compressedOutput = result.messages;
 					responseJson = {
 						compressed: compressedOutput,
 						tokensSaved: result.tokensSaved ?? 0,
-						originalTokens: result.originalTokens,
-						compressedTokens: result.compressedTokens,
+						originalTokens: result.tokensBefore ?? 0,
+						compressedTokens: result.tokensAfter ?? 0,
+						compressionRatio: result.compressionRatio ?? 1,
 					};
 				} else {
 					// chatInput mode
@@ -267,8 +321,9 @@ export class HeadroomTokenOptimizer implements INodeType {
 						...originalJson,
 						chatInput: compressedOutput,
 						tokensSaved: result.tokensSaved ?? 0,
-						originalTokens: result.originalTokens,
-						compressedTokens: result.compressedTokens,
+						originalTokens: result.tokensBefore ?? 0,
+						compressedTokens: result.tokensAfter ?? 0,
+						compressionRatio: result.compressionRatio ?? 1,
 					};
 				}
 
