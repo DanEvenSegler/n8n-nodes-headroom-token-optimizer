@@ -1,6 +1,6 @@
 {
 	"name": "n8n-nodes-headroom-token-optimizer",
-	"version": "1.0.2",
+	"version": "1.0.3",
 	"description": "n8n community node plugin to optimize LLM token usage using Headroom context compression",
 	"license": "MIT",
 	"homepage": "",

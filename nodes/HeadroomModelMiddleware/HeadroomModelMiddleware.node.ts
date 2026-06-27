@@ -110,7 +110,11 @@ function headroomMessageToLangchain(m: HeadroomMessage, originalMsg?: unknown): 
 // Compress a list of messages
 async function compressMessageArray(messages: unknown[], options: HeadroomOptions): Promise<unknown[]> {
 	const headroomMessages = messages.map((msg) => langchainMessageToHeadroom(msg));
+	// eslint-disable-next-line no-console
+	console.log(`[Headroom Middleware] Sending ${headroomMessages.length} messages to Headroom proxy...`);
 	const result = await compress(headroomMessages, options);
+	// eslint-disable-next-line no-console
+	console.log(`[Headroom Middleware] Compression completed. Saved ${result.tokensSaved ?? 0} tokens.`);
 	return result.messages.map((m: HeadroomMessage, idx: number) => {
 		const originalMsg = messages.find((orig) => getMessageRole(orig) === m.role) || messages[idx];
 		return headroomMessageToLangchain(m, originalMsg);
@@ -120,16 +124,24 @@ async function compressMessageArray(messages: unknown[], options: HeadroomOption
 // Intercepts input message arguments and compresses them
 async function compressInput(input: unknown, options: HeadroomOptions): Promise<unknown> {
 	if (typeof input === 'string') {
+		// eslint-disable-next-line no-console
+		console.log('[Headroom Middleware] Compressing raw string input...');
 		const messages = [{ role: 'user', content: input }];
 		const result = await compress(messages, options);
+		// eslint-disable-next-line no-console
+		console.log(`[Headroom Middleware] Compression completed. Saved ${result.tokensSaved ?? 0} tokens.`);
 		return result.messages[0]?.content ?? '';
 	}
 
 	if (input && typeof input === 'object' && !Array.isArray(input)) {
 		const obj = input as Record<string, unknown>;
 		if (obj.content !== undefined) {
+			// eslint-disable-next-line no-console
+			console.log('[Headroom Middleware] Compressing single message object...');
 			const messages = [langchainMessageToHeadroom(input)];
 			const result = await compress(messages, options);
+			// eslint-disable-next-line no-console
+			console.log(`[Headroom Middleware] Compression completed. Saved ${result.tokensSaved ?? 0} tokens.`);
 			return headroomMessageToLangchain(result.messages[0], input);
 		}
 		return input;
@@ -233,6 +245,8 @@ export class HeadroomModelMiddleware implements INodeType {
 	};
 
 	async supplyData(this: ISupplyDataFunctions): Promise<SupplyData> {
+		// eslint-disable-next-line no-console
+		console.log('[Headroom Middleware] supplyData called. Retrieving connection model...');
 		const node = this.getNode();
 		const model = await this.getInputConnectionData('ai_languageModel', 0);
 
