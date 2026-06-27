@@ -112,6 +112,7 @@ interface HeadroomOptions {
 	fallback: boolean;
 	timeout: number;
 	retries: number;
+	tokenBudget?: number;
 }
 
 // Helper to determine message role
@@ -200,7 +201,11 @@ function headroomMessageToLangchain(m: HeadroomMessage, originalMsg?: unknown): 
 }
 
 // Compress a list of messages
-async function compressMessageArray(messages: unknown[], options: HeadroomOptions): Promise<unknown[]> {
+async function compressMessageArray(
+	messages: unknown[],
+	options: HeadroomOptions,
+	stats?: { tokensSaved: number; originalTokens: number; compressedTokens: number }
+): Promise<unknown[]> {
 	const headroomMessages = messages.map((msg) => langchainMessageToHeadroom(msg));
 	// eslint-disable-next-line no-console
 	console.log(`[Headroom Middleware] Sending ${headroomMessages.length} messages to Headroom proxy...`);
@@ -214,6 +219,11 @@ async function compressMessageArray(messages: unknown[], options: HeadroomOption
 	}
 	// eslint-disable-next-line no-console
 	console.log(`[Headroom Middleware] Compression completed. Saved ${result.tokensSaved ?? 0} tokens.`);
+	if (stats) {
+		stats.tokensSaved += result.tokensSaved ?? 0;
+		stats.originalTokens += result.originalTokens ?? result.tokensBefore ?? 0;
+		stats.compressedTokens += result.compressedTokens ?? result.tokensAfter ?? 0;
+	}
 	return result.messages.map((m: HeadroomMessage, idx: number) => {
 		const originalMsg = messages.find((orig) => getMessageRole(orig) === m.role) || messages[idx];
 		return headroomMessageToLangchain(m, originalMsg);
@@ -221,7 +231,11 @@ async function compressMessageArray(messages: unknown[], options: HeadroomOption
 }
 
 // Intercepts input message arguments and compresses them
-async function compressInput(input: unknown, options: HeadroomOptions): Promise<unknown> {
+async function compressInput(
+	input: unknown,
+	options: HeadroomOptions,
+	stats?: { tokensSaved: number; originalTokens: number; compressedTokens: number }
+): Promise<unknown> {
 	if (typeof input === 'string') {
 		// eslint-disable-next-line no-console
 		console.log('[Headroom Middleware] Compressing raw string input...');
@@ -236,6 +250,11 @@ async function compressInput(input: unknown, options: HeadroomOptions): Promise<
 		}
 		// eslint-disable-next-line no-console
 		console.log(`[Headroom Middleware] Compression completed. Saved ${result.tokensSaved ?? 0} tokens.`);
+		if (stats) {
+			stats.tokensSaved += result.tokensSaved ?? 0;
+			stats.originalTokens += result.originalTokens ?? result.tokensBefore ?? 0;
+			stats.compressedTokens += result.compressedTokens ?? result.tokensAfter ?? 0;
+		}
 		return result.messages[0]?.content ?? '';
 	}
 
@@ -255,6 +274,11 @@ async function compressInput(input: unknown, options: HeadroomOptions): Promise<
 			}
 			// eslint-disable-next-line no-console
 			console.log(`[Headroom Middleware] Compression completed. Saved ${result.tokensSaved ?? 0} tokens.`);
+			if (stats) {
+				stats.tokensSaved += result.tokensSaved ?? 0;
+				stats.originalTokens += result.originalTokens ?? result.tokensBefore ?? 0;
+				stats.compressedTokens += result.compressedTokens ?? result.tokensAfter ?? 0;
+			}
 			return headroomMessageToLangchain(result.messages[0], input);
 		}
 		return input;
@@ -266,12 +290,12 @@ async function compressInput(input: unknown, options: HeadroomOptions): Promise<
 			const compressedOuter = [];
 			for (const subArr of arr) {
 				if (Array.isArray(subArr)) {
-					compressedOuter.push(await compressMessageArray(subArr, options));
+					compressedOuter.push(await compressMessageArray(subArr, options, stats));
 				}
 			}
 			return compressedOuter;
 		}
-		return await compressMessageArray(arr, options);
+		return await compressMessageArray(arr, options, stats);
 	}
 
 	return input;
@@ -314,6 +338,13 @@ export class HeadroomModelMiddleware implements INodeType {
 				default: 'gpt-4o',
 				required: true,
 				description: 'The LLM model name (used to calculate accurate token counts for compression)',
+			},
+			{
+				displayName: 'Token Budget',
+				name: 'tokenBudget',
+				type: 'number',
+				default: 0,
+				description: 'Enforce compression when prompt size exceeds this token count. Set to 0 to disable.',
 			},
 			{
 				displayName: 'Base URL',
@@ -368,6 +399,7 @@ export class HeadroomModelMiddleware implements INodeType {
 		}
 
 		const modelNameParam = this.getNodeParameter('model', 0, 'gpt-4o') as string;
+		const tokenBudget = this.getNodeParameter('tokenBudget', 0, 0) as number;
 		const baseUrl = this.getNodeParameter('baseUrl', 0, 'http://localhost:8787') as string;
 		const apiKey = this.getNodeParameter('apiKey', 0, '') as string;
 		const fallback = this.getNodeParameter('fallback', 0, true) as boolean;
@@ -382,6 +414,10 @@ export class HeadroomModelMiddleware implements INodeType {
 			retries,
 		};
 
+		if (tokenBudget > 0) {
+			headroomOptions.tokenBudget = tokenBudget;
+		}
+
 		if (apiKey) {
 			headroomOptions.apiKey = apiKey;
 		}
@@ -389,21 +425,43 @@ export class HeadroomModelMiddleware implements INodeType {
 		// Create a proxy wrapper around the LangChain Model object to intercept execute calls
 		const wrappedModel = new Proxy(model as object, {
 			get(target, prop, receiver) {
-				if (prop === 'generate' || prop === 'invoke' || prop === 'call') {
+				if (
+					prop === 'generate' ||
+					prop === 'invoke' ||
+					prop === 'call' ||
+					prop === 'stream' ||
+					prop === 'batch' ||
+					prop === '_generate' ||
+					prop === '_stream' ||
+					prop === '_streamResponseChunks'
+				) {
 					const originalMethod = Reflect.get(target, prop);
 					if (typeof originalMethod === 'function') {
 						return async function (this: unknown, ...args: unknown[]) {
 							const originalArgs = [...args];
+							const stats = { tokensSaved: 0, originalTokens: 0, compressedTokens: 0 };
 							try {
-								if (prop === 'invoke') {
+								if (prop === 'invoke' || prop === 'stream' || prop === '_stream') {
 									const input = originalArgs[0];
 									if (input) {
-										originalArgs[0] = await compressInput(input, headroomOptions);
+										originalArgs[0] = await compressInput(input, headroomOptions, stats);
 									}
-								} else if (prop === 'generate' || prop === 'call') {
+								} else if (
+									prop === 'generate' ||
+									prop === 'call' ||
+									prop === '_generate' ||
+									prop === '_streamResponseChunks'
+								) {
 									const messages = originalArgs[0];
 									if (messages) {
-										originalArgs[0] = await compressInput(messages, headroomOptions);
+										originalArgs[0] = await compressInput(messages, headroomOptions, stats);
+									}
+								} else if (prop === 'batch') {
+									const inputs = originalArgs[0];
+									if (Array.isArray(inputs)) {
+										originalArgs[0] = await Promise.all(
+											inputs.map((input) => compressInput(input, headroomOptions, stats)),
+										);
 									}
 								}
 							} catch (error) {
@@ -413,7 +471,33 @@ export class HeadroomModelMiddleware implements INodeType {
 								// eslint-disable-next-line no-console
 								console.error('Headroom compression failed, running fallback:', error);
 							}
-							return await (originalMethod as (...args: unknown[]) => unknown).apply(target, originalArgs);
+							const response = await (originalMethod as (...args: unknown[]) => unknown).apply(target, originalArgs);
+
+							// Attach compression statistics to response metadata so they are visible in n8n execution data
+							if (response && typeof response === 'object') {
+								const res = response as any;
+								if (res.response_metadata) {
+									res.response_metadata.headroom = { ...stats };
+								} else if (res.additional_kwargs) {
+									res.additional_kwargs.headroom = { ...stats };
+								} else if (res.generations && Array.isArray(res.generations)) {
+									for (const genArray of res.generations) {
+										if (Array.isArray(genArray)) {
+											for (const gen of genArray) {
+												if (gen && gen.message) {
+													const msg = gen.message;
+													if (!msg.response_metadata) {
+														msg.response_metadata = {};
+													}
+													msg.response_metadata.headroom = { ...stats };
+												}
+											}
+										}
+									}
+								}
+							}
+
+							return response;
 						};
 					}
 				}

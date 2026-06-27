@@ -189,6 +189,13 @@ export class HeadroomTokenOptimizer implements INodeType {
 				description: 'The LLM model name (used to calculate accurate token counts for compression)',
 			},
 			{
+				displayName: 'Token Budget',
+				name: 'tokenBudget',
+				type: 'number',
+				default: 0,
+				description: 'Enforce compression when prompt size exceeds this token count. Set to 0 to disable.',
+			},
+			{
 				displayName: 'Base URL',
 				name: 'baseUrl',
 				type: 'string',
@@ -238,6 +245,7 @@ export class HeadroomTokenOptimizer implements INodeType {
 			try {
 				const mode = this.getNodeParameter('mode', i, 'text') as 'text' | 'messages' | 'chatInput';
 				const model = this.getNodeParameter('model', i, 'gpt-4o') as string;
+				const tokenBudget = this.getNodeParameter('tokenBudget', i, 0) as number;
 				const baseUrl = this.getNodeParameter('baseUrl', i, 'http://localhost:8787') as string;
 				const apiKey = this.getNodeParameter('apiKey', i, '') as string;
 				const fallback = this.getNodeParameter('fallback', i, true) as boolean;
@@ -274,6 +282,7 @@ export class HeadroomTokenOptimizer implements INodeType {
 					fallback: boolean;
 					retries: number;
 					apiKey?: string;
+					tokenBudget?: number;
 				} = {
 					model,
 					baseUrl,
@@ -281,6 +290,10 @@ export class HeadroomTokenOptimizer implements INodeType {
 					fallback,
 					retries,
 				};
+
+				if (tokenBudget > 0) {
+					options.tokenBudget = tokenBudget;
+				}
 
 				if (apiKey) {
 					options.apiKey = apiKey;
