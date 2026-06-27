@@ -303,6 +303,7 @@ export class HeadroomTokenOptimizer implements INodeType {
 						originalTokens: result.tokensBefore ?? 0,
 						compressedTokens: result.tokensAfter ?? 0,
 						compressionRatio: result.compressionRatio ?? 1,
+						transformsApplied: result.transformsApplied ?? [],
 					};
 				} else if (mode === 'messages') {
 					compressedOutput = result.messages;
@@ -312,6 +313,7 @@ export class HeadroomTokenOptimizer implements INodeType {
 						originalTokens: result.tokensBefore ?? 0,
 						compressedTokens: result.tokensAfter ?? 0,
 						compressionRatio: result.compressionRatio ?? 1,
+						transformsApplied: result.transformsApplied ?? [],
 					};
 				} else {
 					// chatInput mode
@@ -324,6 +326,7 @@ export class HeadroomTokenOptimizer implements INodeType {
 						originalTokens: result.tokensBefore ?? 0,
 						compressedTokens: result.tokensAfter ?? 0,
 						compressionRatio: result.compressionRatio ?? 1,
+						transformsApplied: result.transformsApplied ?? [],
 					};
 				}
 

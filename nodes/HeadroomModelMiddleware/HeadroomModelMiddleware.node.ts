@@ -128,8 +128,8 @@ async function compressMessageArray(
 	console.log(`[Headroom Middleware] Compression completed. Saved ${result.tokensSaved ?? 0} tokens.`);
 	if (stats) {
 		stats.tokensSaved += result.tokensSaved ?? 0;
-		stats.originalTokens += result.originalTokens ?? result.tokensBefore ?? 0;
-		stats.compressedTokens += result.compressedTokens ?? result.tokensAfter ?? 0;
+		stats.originalTokens += result.tokensBefore ?? 0;
+		stats.compressedTokens += result.tokensAfter ?? 0;
 	}
 	return result.messages.map((m: HeadroomMessage, idx: number) => {
 		const originalMsg = messages.find((orig) => getMessageRole(orig) === m.role) || messages[idx];
@@ -152,8 +152,8 @@ async function compressInput(
 		console.log(`[Headroom Middleware] Compression completed. Saved ${result.tokensSaved ?? 0} tokens.`);
 		if (stats) {
 			stats.tokensSaved += result.tokensSaved ?? 0;
-			stats.originalTokens += result.originalTokens ?? result.tokensBefore ?? 0;
-			stats.compressedTokens += result.compressedTokens ?? result.tokensAfter ?? 0;
+			stats.originalTokens += result.tokensBefore ?? 0;
+			stats.compressedTokens += result.tokensAfter ?? 0;
 		}
 		return result.messages[0]?.content ?? '';
 	}
@@ -169,8 +169,8 @@ async function compressInput(
 			console.log(`[Headroom Middleware] Compression completed. Saved ${result.tokensSaved ?? 0} tokens.`);
 			if (stats) {
 				stats.tokensSaved += result.tokensSaved ?? 0;
-				stats.originalTokens += result.originalTokens ?? result.tokensBefore ?? 0;
-				stats.compressedTokens += result.compressedTokens ?? result.tokensAfter ?? 0;
+				stats.originalTokens += result.tokensBefore ?? 0;
+				stats.compressedTokens += result.tokensAfter ?? 0;
 			}
 			return headroomMessageToLangchain(result.messages[0], input);
 		}
@@ -206,10 +206,11 @@ export class HeadroomModelMiddleware implements INodeType {
 		version: 1,
 		subtitle: '={{$parameter["model"]}}',
 		usableAsTool: true,
-		description: 'Intercepts and compresses LLM prompts as middleware',
+		description: 'Intercepts and compresses LLM prompts as middleware. Works best with repetitive content like tool outputs, logs, and conversation history.',
 		defaults: {
 			name: 'Headroom Model Middleware',
 		},
+		// @ts-ignore - n8n uses string connection types
 		inputs: [
 			{
 				displayName: 'Model',
@@ -217,6 +218,7 @@ export class HeadroomModelMiddleware implements INodeType {
 				required: true,
 			},
 		],
+		// @ts-ignore
 		outputs: [
 			{
 				displayName: 'Model',
@@ -384,95 +386,161 @@ export class HeadroomModelMiddleware implements INodeType {
 			headroomOptions.apiKey = apiKey;
 		}
 
-		// Create a proxy wrapper around the LangChain Model object to intercept execute calls
-		const wrappedModel = new Proxy(model as object, {
-			get(target, prop, receiver) {
-				if (
-					prop === 'generate' ||
-					prop === 'invoke' ||
-					prop === 'call' ||
-					prop === 'stream' ||
-					prop === 'batch' ||
-					prop === '_generate' ||
-					prop === '_stream' ||
-					prop === '_streamResponseChunks'
-				) {
-					const originalMethod = Reflect.get(target, prop);
-					if (typeof originalMethod === 'function') {
-						return async function (this: unknown, ...args: unknown[]) {
-							const originalArgs = [...args];
-							const stats = { tokensSaved: 0, originalTokens: 0, compressedTokens: 0 };
-							try {
-								if (prop === 'invoke' || prop === 'stream' || prop === '_stream') {
-									const input = originalArgs[0];
-									if (input) {
-										originalArgs[0] = await compressInput(input, headroomOptions, stats);
-									}
-								} else if (
-									prop === 'generate' ||
-									prop === 'call' ||
-									prop === '_generate' ||
-									prop === '_streamResponseChunks'
-								) {
-									const messages = originalArgs[0];
-									if (messages) {
-										originalArgs[0] = await compressInput(messages, headroomOptions, stats);
-									}
-								} else if (prop === 'batch') {
-									const inputs = originalArgs[0];
-									if (Array.isArray(inputs)) {
-										originalArgs[0] = await Promise.all(
-											inputs.map((input) => compressInput(input, headroomOptions, stats)),
-										);
-									}
-								}
-							} catch (error) {
-								throw new NodeOperationError(node, `Headroom compression failed: ${(error as Error).message}`);
-							}
-							const response = await (originalMethod as (...args: unknown[]) => unknown).apply(target, originalArgs);
+		// Monkey-patch the model methods directly instead of using a Proxy.
+		// This preserves the original object identity so n8n can properly track execution.
+		const modelObj = model as Record<string, unknown>;
 
-							// Attach compression statistics to response metadata so they are visible in n8n execution data
-							if (response && typeof response === 'object') {
-								const res = response as any;
-								if (res.response_metadata) {
-									res.response_metadata.headroom = { ...stats };
-								} else if (res.additional_kwargs) {
-									res.additional_kwargs.headroom = { ...stats };
-								} else if (res.generations && Array.isArray(res.generations)) {
-									for (const genArray of res.generations) {
-										if (Array.isArray(genArray)) {
-											for (const gen of genArray) {
-												if (gen && gen.message) {
-													const msg = gen.message;
-													if (!msg.response_metadata) {
-														msg.response_metadata = {};
-													}
-													msg.response_metadata.headroom = { ...stats };
-												}
-											}
-										}
+		// Helper to compress args based on method type
+		async function compressArgs(
+			methodName: string,
+			args: unknown[],
+			stats: { tokensSaved: number; originalTokens: number; compressedTokens: number },
+		): Promise<unknown[]> {
+			const modifiedArgs = [...args];
+			const isInvokeLike = methodName === 'invoke' || methodName === 'stream' || methodName === '_stream';
+			const isBatch = methodName === 'batch';
+
+			if (isInvokeLike) {
+				const input = modifiedArgs[0];
+				if (input) {
+					modifiedArgs[0] = await compressInput(input, headroomOptions, stats);
+				}
+			} else if (isBatch) {
+				const inputs = modifiedArgs[0];
+				if (Array.isArray(inputs)) {
+					modifiedArgs[0] = await Promise.all(
+						inputs.map((inp) => compressInput(inp, headroomOptions, stats)),
+					);
+				}
+			} else {
+				// generate, call, _generate
+				const messages = modifiedArgs[0];
+				if (messages) {
+					modifiedArgs[0] = await compressInput(messages, headroomOptions, stats);
+				}
+			}
+			return modifiedArgs;
+		}
+
+		// Attach stats to a response object
+		function attachStats(response: unknown, stats: { tokensSaved: number; originalTokens: number; compressedTokens: number }) {
+			if (response && typeof response === 'object') {
+				const res = response as any;
+				if (res.response_metadata) {
+					res.response_metadata.headroom = { ...stats };
+				} else if (res.additional_kwargs) {
+					res.additional_kwargs.headroom = { ...stats };
+				} else if (res.generations && Array.isArray(res.generations)) {
+					for (const genArray of res.generations) {
+						if (Array.isArray(genArray)) {
+							for (const gen of genArray) {
+								if (gen && gen.message) {
+									const msg = gen.message;
+									if (!msg.response_metadata) {
+										msg.response_metadata = {};
 									}
+									msg.response_metadata.headroom = { ...stats };
 								}
 							}
+						}
+					}
+				}
+			}
+		}
 
-							return response;
-						};
+		// Methods that return a regular value (Promise)
+		const regularMethods = ['generate', 'invoke', 'call', 'batch', '_generate'];
+		// Methods that return an AsyncGenerator / AsyncIterable
+		const generatorMethods = ['_streamResponseChunks'];
+		// 'stream' is a special case — LangChain's BaseChatModel.stream() calls _streamIterator
+		// which internally calls _streamResponseChunks. We only wrap _streamResponseChunks.
+		// We also wrap _stream if it exists.
+		const streamMethods = ['_stream'];
+
+		for (const methodName of regularMethods) {
+			const originalMethod = modelObj[methodName];
+			if (typeof originalMethod !== 'function') continue;
+
+			modelObj[methodName] = async function (this: unknown, ...args: unknown[]) {
+				const stats = { tokensSaved: 0, originalTokens: 0, compressedTokens: 0 };
+				let modifiedArgs = args;
+
+				try {
+					modifiedArgs = await compressArgs(methodName, args, stats);
+				} catch (error) {
+					if (fallback) {
+						// eslint-disable-next-line no-console
+						console.warn(`[Headroom Middleware] Compression failed, falling back: ${(error as Error).message}`);
+					} else {
+						throw new NodeOperationError(node, `Headroom compression failed: ${(error as Error).message}`);
 					}
 				}
 
-				const value = Reflect.get(target, prop, target);
-				if (typeof value === 'function' && prop !== 'constructor') {
-					if (prop === 'bind' || prop === 'bindTools') {
-						return (value as (...args: unknown[]) => unknown).bind(receiver);
+				const response = await (originalMethod as (...a: unknown[]) => unknown).apply(modelObj, modifiedArgs);
+				attachStats(response, stats);
+				return response;
+			};
+		}
+
+		// Wrap generator methods: these must return AsyncGenerator
+		for (const methodName of generatorMethods) {
+			const originalMethod = modelObj[methodName];
+			if (typeof originalMethod !== 'function') continue;
+
+			modelObj[methodName] = async function* (this: unknown, ...args: unknown[]) {
+				const stats = { tokensSaved: 0, originalTokens: 0, compressedTokens: 0 };
+				let modifiedArgs = args;
+
+				try {
+					modifiedArgs = await compressArgs(methodName, args, stats);
+				} catch (error) {
+					if (fallback) {
+						// eslint-disable-next-line no-console
+						console.warn(`[Headroom Middleware] Compression failed, falling back: ${(error as Error).message}`);
+					} else {
+						throw new NodeOperationError(node, `Headroom compression failed: ${(error as Error).message}`);
 					}
-					return (value as (...args: unknown[]) => unknown).bind(target);
 				}
-				return value;
-			},
-		});
+
+				const iterator = (originalMethod as (...a: unknown[]) => AsyncIterable<unknown>).apply(modelObj, modifiedArgs);
+				let lastChunk: unknown;
+				for await (const chunk of iterator) {
+					lastChunk = chunk;
+					yield chunk;
+				}
+				attachStats(lastChunk, stats);
+			};
+		}
+
+		// Wrap _stream: also an async generator
+		for (const methodName of streamMethods) {
+			const originalMethod = modelObj[methodName];
+			if (typeof originalMethod !== 'function') continue;
+
+			modelObj[methodName] = async function* (this: unknown, ...args: unknown[]) {
+				const stats = { tokensSaved: 0, originalTokens: 0, compressedTokens: 0 };
+				let modifiedArgs = args;
+
+				try {
+					modifiedArgs = await compressArgs(methodName, args, stats);
+				} catch (error) {
+					if (fallback) {
+						// eslint-disable-next-line no-console
+						console.warn(`[Headroom Middleware] Compression failed, falling back: ${(error as Error).message}`);
+					} else {
+						throw new NodeOperationError(node, `Headroom compression failed: ${(error as Error).message}`);
+					}
+				}
+
+				const iterator = (originalMethod as (...a: unknown[]) => AsyncIterable<unknown>).apply(modelObj, modifiedArgs);
+				for await (const chunk of iterator) {
+					yield chunk;
+				}
+			};
+		}
 
 		return {
-			response: wrappedModel,
+			response: model,
 		};
 	}
 }
