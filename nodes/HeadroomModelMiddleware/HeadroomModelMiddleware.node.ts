@@ -8,97 +8,7 @@ import {
 import { compress } from 'headroom-ai';
 import { HumanMessage, AIMessage, SystemMessage, ToolMessage } from '@langchain/core/messages';
 
-// Native local compression helper for logs and text
-function localCompressText(text: string): { compressed: string; originalTokens: number; compressedTokens: number; tokensSaved: number } {
-	const estimateTokens = (t: string) => Math.max(1, Math.ceil(t.length / 4));
-	const originalTokens = estimateTokens(text);
 
-	// Log cleanup: collapse contiguous duplicate log lines
-	const lines = text.split('\n');
-	const uniqueLines: string[] = [];
-	let lastLine = '';
-	let repeatCount = 0;
-
-	const getLogCore = (l: string) => {
-		return l
-			.replace(/\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z?/, '') // Timestamps
-			.replace(/[a-zA-Z0-9_\-]+\.go:\d+/, '') // Go files
-			.replace(/[a-zA-Z0-9_\-]+\.py:\d+/, '') // Python files
-			.replace(/[a-zA-Z0-9_\-]+\.js:\d+/, '') // JS files
-			.replace(/Attempt \d+ of \d+/, 'Attempt X of Y') // Attempts
-			.replace(/retrying in \d+m?s/, 'retrying in X ms') // Durations
-			.trim();
-	};
-
-	for (let line of lines) {
-		line = line.trim();
-		if (!line) continue;
-
-		const currentCore = getLogCore(line);
-		const lastCore = getLogCore(lastLine);
-
-		if (lastLine && currentCore === lastCore) {
-			repeatCount++;
-		} else {
-			if (repeatCount > 0) {
-				uniqueLines.push(`[... repeated ${repeatCount} times ...]`);
-				repeatCount = 0;
-			}
-			uniqueLines.push(line);
-			lastLine = line;
-		}
-	}
-	if (repeatCount > 0) {
-		uniqueLines.push(`[... repeated ${repeatCount} times ...]`);
-	}
-
-	let compressed = uniqueLines.join('\n');
-
-	// JSON-like minification
-	if (compressed.startsWith('{') && compressed.endsWith('}')) {
-		try {
-			const parsed = JSON.parse(compressed);
-			compressed = JSON.stringify(parsed);
-		} catch (e) {}
-	}
-
-	// Double spaces cleanup
-	compressed = compressed.replace(/[ \t]+/g, ' ');
-
-	const compressedTokens = estimateTokens(compressed);
-	const tokensSaved = Math.max(0, originalTokens - compressedTokens);
-
-	return {
-		compressed,
-		originalTokens,
-		compressedTokens,
-		tokensSaved,
-	};
-}
-
-function localCompressMessages(messages: Array<{ role: string; content: string }>): { messages: Array<{ role: string; content: string }>; tokensSaved: number; originalTokens: number; compressedTokens: number } {
-	let originalTokens = 0;
-	let compressedTokens = 0;
-
-	const compressedMessages = messages.map((msg) => {
-		const result = localCompressText(msg.content);
-		originalTokens += result.originalTokens;
-		compressedTokens += result.compressedTokens;
-		return {
-			role: msg.role,
-			content: result.compressed,
-		};
-	});
-
-	const tokensSaved = Math.max(0, originalTokens - compressedTokens);
-
-	return {
-		messages: compressedMessages,
-		tokensSaved,
-		originalTokens,
-		compressedTokens,
-	};
-}
 
 interface HeadroomMessage {
 	role: string;
@@ -209,14 +119,7 @@ async function compressMessageArray(
 	const headroomMessages = messages.map((msg) => langchainMessageToHeadroom(msg));
 	// eslint-disable-next-line no-console
 	console.log(`[Headroom Middleware] Sending ${headroomMessages.length} messages to Headroom proxy...`);
-	let result: any;
-	try {
-		result = await compress(headroomMessages, { ...options, fallback: false });
-	} catch (error) {
-		// eslint-disable-next-line no-console
-		console.log('[Headroom Middleware] Proxy unreachable, falling back to native JS context compression...');
-		result = localCompressMessages(headroomMessages);
-	}
+	const result = (await compress(headroomMessages, { ...options, fallback: false })) as any;
 	// eslint-disable-next-line no-console
 	console.log(`[Headroom Middleware] Compression completed. Saved ${result.tokensSaved ?? 0} tokens.`);
 	if (stats) {
@@ -240,14 +143,7 @@ async function compressInput(
 		// eslint-disable-next-line no-console
 		console.log('[Headroom Middleware] Compressing raw string input...');
 		const messages = [{ role: 'user', content: input }];
-		let result: any;
-		try {
-			result = await compress(messages, { ...options, fallback: false });
-		} catch (error) {
-			// eslint-disable-next-line no-console
-			console.log('[Headroom Middleware] Proxy unreachable, falling back to native JS context compression...');
-			result = localCompressMessages(messages);
-		}
+		const result = (await compress(messages, { ...options, fallback: false })) as any;
 		// eslint-disable-next-line no-console
 		console.log(`[Headroom Middleware] Compression completed. Saved ${result.tokensSaved ?? 0} tokens.`);
 		if (stats) {
@@ -264,14 +160,7 @@ async function compressInput(
 			// eslint-disable-next-line no-console
 			console.log('[Headroom Middleware] Compressing single message object...');
 			const messages = [langchainMessageToHeadroom(input)];
-			let result: any;
-			try {
-				result = await compress(messages, { ...options, fallback: false });
-			} catch (error) {
-				// eslint-disable-next-line no-console
-				console.log('[Headroom Middleware] Proxy unreachable, falling back to native JS context compression...');
-				result = localCompressMessages(messages);
-			}
+			const result = (await compress(messages, { ...options, fallback: false })) as any;
 			// eslint-disable-next-line no-console
 			console.log(`[Headroom Middleware] Compression completed. Saved ${result.tokensSaved ?? 0} tokens.`);
 			if (stats) {
@@ -465,11 +354,7 @@ export class HeadroomModelMiddleware implements INodeType {
 									}
 								}
 							} catch (error) {
-								if (!headroomOptions.fallback) {
-									throw new NodeOperationError(node, error as Error);
-								}
-								// eslint-disable-next-line no-console
-								console.error('Headroom compression failed, running fallback:', error);
+								throw new NodeOperationError(node, `Headroom compression failed: ${(error as Error).message}`);
 							}
 							const response = await (originalMethod as (...args: unknown[]) => unknown).apply(target, originalArgs);
 
