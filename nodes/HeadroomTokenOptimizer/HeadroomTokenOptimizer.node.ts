@@ -1,4 +1,5 @@
 import {
+	IDataObject,
 	IExecuteFunctions,
 	INodeExecutionData,
 	INodeType,
@@ -40,6 +41,11 @@ export class HeadroomTokenOptimizer implements INodeType {
 				type: 'options',
 				options: [
 					{
+						name: 'Chat Input ($json.chatInput)',
+						value: 'chatInput',
+						description: 'Automatically compress the incoming chatInput property and output it',
+					},
+					{
 						name: 'Messages (JSON)',
 						value: 'messages',
 						description: 'Compress a structured array of chat messages (conversation history)',
@@ -50,8 +56,8 @@ export class HeadroomTokenOptimizer implements INodeType {
 						description: 'Compress a raw block of text (e.g. documents, logs, RAG context)',
 					},
 				],
-				default: 'text',
-				description: 'Choose whether to compress text or chat messages',
+				default: 'chatInput',
+				description: 'Choose whether to compress text, chat messages, or the incoming chatInput',
 			},
 			{
 				displayName: 'Input Text',
@@ -138,7 +144,7 @@ export class HeadroomTokenOptimizer implements INodeType {
 
 		for (let i = 0; i < items.length; i++) {
 			try {
-				const mode = this.getNodeParameter('mode', i, 'text') as 'text' | 'messages';
+				const mode = this.getNodeParameter('mode', i, 'text') as 'text' | 'messages' | 'chatInput';
 				const model = this.getNodeParameter('model', i, 'gpt-4o') as string;
 				const baseUrl = this.getNodeParameter('baseUrl', i, 'http://localhost:8787') as string;
 				const apiKey = this.getNodeParameter('apiKey', i, '') as string;
@@ -151,6 +157,13 @@ export class HeadroomTokenOptimizer implements INodeType {
 				if (mode === 'text') {
 					const inputText = this.getNodeParameter('inputText', i, '') as string;
 					messagesToCompress = [{ role: 'user', content: inputText }];
+				} else if (mode === 'chatInput') {
+					const itemJson = items[i].json;
+					const chatInput = (itemJson.chatInput ?? '') as string;
+					if (!chatInput) {
+						throw new NodeOperationError(this.getNode(), 'No "chatInput" property found on incoming item data. Make sure this node is placed after a Chat Trigger node.', { itemIndex: i });
+					}
+					messagesToCompress = [{ role: 'user', content: chatInput }];
 				} else {
 					const inputMessages = this.getNodeParameter('inputMessages', i, '[]') as string | Array<{ role: string; content: string }>;
 					if (typeof inputMessages === 'string') {
@@ -184,19 +197,39 @@ export class HeadroomTokenOptimizer implements INodeType {
 				const result = (await compress(messagesToCompress, options)) as unknown as HeadroomCompressResult;
 
 				let compressedOutput: string | Array<{ role: string; content: string }>;
+				let responseJson: IDataObject = {};
+
 				if (mode === 'text') {
 					compressedOutput = result.messages[0]?.content ?? '';
-				} else {
-					compressedOutput = result.messages;
-				}
-
-				returnData.push({
-					json: {
+					responseJson = {
 						compressed: compressedOutput,
 						tokensSaved: result.tokensSaved ?? 0,
 						originalTokens: result.originalTokens,
 						compressedTokens: result.compressedTokens,
-					},
+					};
+				} else if (mode === 'messages') {
+					compressedOutput = result.messages;
+					responseJson = {
+						compressed: compressedOutput,
+						tokensSaved: result.tokensSaved ?? 0,
+						originalTokens: result.originalTokens,
+						compressedTokens: result.compressedTokens,
+					};
+				} else {
+					// chatInput mode
+					const originalJson = items[i].json;
+					compressedOutput = result.messages[0]?.content ?? '';
+					responseJson = {
+						...originalJson,
+						chatInput: compressedOutput,
+						tokensSaved: result.tokensSaved ?? 0,
+						originalTokens: result.originalTokens,
+						compressedTokens: result.compressedTokens,
+					};
+				}
+
+				returnData.push({
+					json: responseJson,
 					pairedItem: {
 						item: i,
 					},
